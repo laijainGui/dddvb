@@ -18,3 +18,5 @@ octonet: octonet.c
 octokey: octokey.c
 	$(CC) -o octokey octokey.c
 
+clean:
+	rm -rf ddtest octonet octokey ddflash

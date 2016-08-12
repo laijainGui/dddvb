@@ -15,5 +15,3 @@ install: all
 
 clean:
 	rm -rf */*.o */*.ko */*.mod.c */.*.cmd .tmp_versions Module* modules*
-
-

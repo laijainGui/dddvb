@@ -17,3 +17,6 @@ ddtest: ddtest.c
 
 ddflash: ddflash.c
 	gcc -o ddflash ddflash.c
+
+clean:
+	rm -rf cit citin flashprog modt ddtest setmod ddflash
