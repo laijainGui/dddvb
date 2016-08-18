@@ -538,26 +538,161 @@ static int set_parameters(struct dvb_frontend *fe)
 	return stat;
 }
 
-static int get_stats(struct dvb_frontend *fe);
-
-static int read_status(struct dvb_frontend *fe, fe_status_t *status)
+static int read_status(struct dvb_frontend *fe, enum fe_status *status)
 {
 	struct mxl *state = fe->demodulator_priv;
-
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	int stat;
-	u32 regData = 0;
+	u32 reg[8];
 
+
+	*status = FE_HAS_SIGNAL;
+
+	/* Read RF level */
+	mutex_lock(&state->base->status_lock);
+	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
+	stat = read_register(state, (HYDRA_DMD_STATUS_INPUT_POWER_ADDR +
+				     HYDRA_DMD_STATUS_OFFSET(state->demod)),
+			     reg);
+	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
+	mutex_unlock(&state->base->status_lock);
+
+	p->strength.len = 1;
+	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
+	p->strength.stat[0].svalue = (s16)reg[0] * 10;
+
+	/* Read demod lock status */
 	mutex_lock(&state->base->status_lock);
 	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
 	stat = read_register(state, (HYDRA_DMD_LOCK_STATUS_ADDR_OFFSET +
 				     HYDRA_DMD_STATUS_OFFSET(state->demod)),
-			     &regData);
+			     reg);
 	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
 	mutex_unlock(&state->base->status_lock);
 
-	*status = (regData == 1) ? 0x1f : 0;
-	get_stats(fe);
-	return stat;
+	if (reg[0] == 1)
+		*status |= FE_HAS_CARRIER | FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
+	else
+	{
+		p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		return 0;
+	}
+
+	/* Read SNR */
+	mutex_lock(&state->base->status_lock);
+	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
+	stat = read_register(state, (HYDRA_DMD_SNR_ADDR_OFFSET +
+					HYDRA_DMD_STATUS_OFFSET(state->demod)),
+					reg);
+	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
+	mutex_unlock(&state->base->status_lock);
+
+	p->cnr.len = 1;
+	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
+	p->cnr.stat[0].svalue = (s16)reg[0] * 10;
+
+	/* Read BER */
+	mutex_lock(&state->base->status_lock);
+	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
+
+	stat = read_register_block(state,
+				   (HYDRA_DMD_DVBS_1ST_CORR_RS_ERRORS_ADDR_OFFSET +
+				    HYDRA_DMD_STATUS_OFFSET(state->demod)),
+				   (4 * sizeof(u32)),
+				   (u8 *) reg);
+	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
+
+	switch (p->delivery_system) {
+	case SYS_DSS:
+	case SYS_DVBS:
+		p->pre_bit_error.len = 1;
+		p->pre_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+		p->pre_bit_error.stat[0].uvalue = reg[2];
+		p->pre_bit_count.len = 1;
+		p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+		p->pre_bit_count.stat[0].uvalue = reg[3];
+		/* pr_warn("mxl5xx: pre_bit_error=%u pre_bit_count=%u\n", p->pre_bit_error.stat[0].uvalue, p->pre_bit_count.stat[0].uvalue); */
+		break;
+	default:
+		break;
+	}
+
+	stat = read_register_block(state,
+				   (HYDRA_DMD_DVBS2_CRC_ERRORS_ADDR_OFFSET +
+				    HYDRA_DMD_STATUS_OFFSET(state->demod)),
+				   (7 * sizeof(u32)),
+				   (u8 *) reg);
+
+	mutex_unlock(&state->base->status_lock);
+
+	switch (p->delivery_system) {
+	case SYS_DSS:
+	case SYS_DVBS:
+		p->post_bit_error.len = 1;
+		p->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+		p->post_bit_error.stat[0].uvalue = reg[5];
+		p->post_bit_count.len = 1;
+		p->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+		p->post_bit_count.stat[0].uvalue = reg[6];
+		break;
+	case SYS_DVBS2:
+		p->post_bit_error.len = 1;
+		p->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+		p->post_bit_error.stat[0].uvalue = reg[1];
+		p->post_bit_count.len = 1;
+		p->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+		p->post_bit_count.stat[0].uvalue = reg[2];
+		break;
+	default:
+		break;
+	}
+	/* pr_warn("mxl5xx: post_bit_error=%u post_bit_count=%u\n", p->post_bit_error.stat[0].uvalue, p->post_bit_count.stat[0].uvalue); */
+
+	return 0;
+}
+
+static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	*strength = p->strength.stat[0].scale == FE_SCALE_DECIBEL ? ((100000 + (s32)p->strength.stat[0].svalue) / 1000) * 656 : 0;
+
+	return 0;
+
+}
+
+static int read_snr(struct dvb_frontend *fe, u16 *snr)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if (p->cnr.stat[0].scale == FE_SCALE_DECIBEL) {
+		 *snr = (s32)p->cnr.stat[0].svalue / 100;
+		 if (*snr > 200)
+			  *snr = 0xffff;
+		 else
+			  *snr *= 328;
+	} else *snr = 0;
+
+	return 0;
+}
+
+static int read_ber(struct dvb_frontend *fe, u32 *ber)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if ( p->post_bit_error.stat[0].scale == FE_SCALE_COUNTER &&
+		p->post_bit_count.stat[0].scale == FE_SCALE_COUNTER )	  
+	      *ber = (u32)p->post_bit_count.stat[0].uvalue ? (u32)p->post_bit_error.stat[0].uvalue / (u32)p->post_bit_count.stat[0].uvalue : 0;
+
+	return 0;
+}
+
+static int read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
+{
+	*ucblocks = 0;
+	return 0;
 }
 
 static int tune(struct dvb_frontend *fe, bool re_tune,
@@ -615,116 +750,6 @@ static int sleep(struct dvb_frontend *fe)
 			enable_tuner(state, state->tuner, 0);
 		mutex_unlock(&state->base->tune_lock);
 	}
-	return 0;
-}
-
-static int read_snr(struct dvb_frontend *fe, u16 *snr)
-{
-	struct mxl *state = fe->demodulator_priv;
-	int stat;
-	u32 regData = 0;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-
-	mutex_lock(&state->base->status_lock);
-	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
-	stat = read_register(state, (HYDRA_DMD_SNR_ADDR_OFFSET +
-				     HYDRA_DMD_STATUS_OFFSET(state->demod)),
-			     &regData);
-	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
-	mutex_unlock(&state->base->status_lock);
-	*snr = (s16) (regData & 0xFFFF); /* 100x dB */
-	p->cnr.len = 1;
-	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	p->cnr.stat[0].uvalue = 10 * (s64) *snr; 
-	return stat;
-}
-
-static int read_ber(struct dvb_frontend *fe, u32 *ber)
-{
-	struct mxl *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u32 reg[8], reg2[4], n = 0, d = 0;
-	int stat;
-	
-	*ber = 0;
-	mutex_lock(&state->base->status_lock);
-	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
-	stat = read_register_block(state,
-				   (HYDRA_DMD_DVBS2_CRC_ERRORS_ADDR_OFFSET +
-				    HYDRA_DMD_STATUS_OFFSET(state->demod)),
-				   (7 * sizeof(u32)),
-				   (u8 *) &reg[0]);
-	stat = read_register_block(
-		state,
-		(HYDRA_DMD_DVBS_1ST_CORR_RS_ERRORS_ADDR_OFFSET +
-		 HYDRA_DMD_STATUS_OFFSET(state->demod)),
-		(4 * sizeof(u32)),
-		(u8 *) &reg2[0]);
-	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
-	mutex_unlock(&state->base->status_lock);
-	
-	
-	switch (p->delivery_system) {
-	case SYS_DSS:
-		break;
-	case SYS_DVBS:
-		p->pre_bit_error.len = 1;
-		p->pre_bit_error.stat[0].scale = FE_SCALE_COUNTER;
-		p->pre_bit_error.stat[0].uvalue = reg[5];
-		p->pre_bit_count.len = 1;
-		p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
-		p->pre_bit_count.stat[0].uvalue = reg[6] * 188 * 8;
-		break;
-	case SYS_DVBS2:
-		break;
-	default:
-		break;
-	}
-	pr_debug("mxl5xx: ber %08x %08x %08x %08x %08x %08x %08x\n",
-		reg[0], reg[1], reg[2], reg[3], reg[4], reg[5], reg[6]);
-	pr_debug("mxl5xx: ber2 %08x %08x %08x %08x\n",
-		reg[0], reg[1], reg[2], reg[3]);
-        //pre_bit_error, pre_bit_count
-	//post_bit_error, post_bit_count;
-	//block_error block_count;
-	//reset_fec_counter(state);
-	return 0;
-}
-
-static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
-{
-	struct mxl *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	int stat;
-	u32 regData = 0;
-
-	mutex_lock(&state->base->status_lock);
-	HYDRA_DEMOD_STATUS_LOCK(state, state->demod);
-	stat = read_register(state, (HYDRA_DMD_STATUS_INPUT_POWER_ADDR +
-				     HYDRA_DMD_STATUS_OFFSET(state->demod)),
-			     &regData);
-	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
-	mutex_unlock(&state->base->status_lock);
-	*strength = (u16) (regData & 0xFFFF); /* 10x dBm */
-	p->strength.len = 1;
-	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	p->strength.stat[0].uvalue = 10 * (s64) (s16) (regData & 0xFFFF); 
-	return stat;
-}
-
-static int read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
-{
-	return 0;
-}
-
-static int get_stats(struct dvb_frontend *fe)
-{
-	u16 val;
-	u32 val32;
-
-	read_signal_strength(fe, &val);
-	read_snr(fe, &val);
-	read_ber(fe, &val32);
 	return 0;
 }
 
