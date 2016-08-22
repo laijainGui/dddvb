@@ -3553,194 +3553,6 @@ static enum dvbfe_search stv090x_search(struct dvb_frontend *fe, struct dvb_fron
 	return DVBFE_ALGO_SEARCH_ERROR;
 }
 
-static int stv090x_read_cnr(struct dvb_frontend *fe, u16 *cnr);
-static int stv090x_read_signal_strength(struct dvb_frontend *fe, u16 *strength);
-
-static int stv090x_ber_prop(struct dvb_frontend *fe, enum fe_status *status)
-{
-        struct stv090x_state *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-
-        u32 reg, h, m, l;
-	u32 n = 0, d = 1;
-
-        if (!(*status & FE_HAS_LOCK)) {
-		n = 1;
-		d = 1;
-        } else {
-		/* Counter 1 */
-		reg = STV090x_READ_DEMOD(state, ERRCNT12);
-		h = STV090x_GETFIELD_Px(reg, ERR_CNT12_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT11);
-		m = STV090x_GETFIELD_Px(reg, ERR_CNT11_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT10);
-		l = STV090x_GETFIELD_Px(reg, ERR_CNT10_FIELD);
-
-		n = ((h << 16) | (m << 8) | l);
-		
-        }
-	p->pre_bit_error.len = 1;
-	p->pre_bit_error.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_error.stat[0].uvalue =n;
-	p->pre_bit_count.len = 1;
-	p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_count.stat[0].uvalue = d;
-        return 0;
-}
-
-static int stv090x_read_status(struct dvb_frontend *fe, enum fe_status *status)
-{
-	struct stv090x_state *state = fe->demodulator_priv;
-	u32 reg, dstatus;
-	u8 search_state;
-
-	*status = 0;
-
-	dstatus = STV090x_READ_DEMOD(state, DSTATUS);
-	if (STV090x_GETFIELD_Px(dstatus, CAR_LOCK_FIELD))
-		*status |= FE_HAS_SIGNAL | FE_HAS_CARRIER;
-
-	reg = STV090x_READ_DEMOD(state, DMDSTATE);
-	search_state = STV090x_GETFIELD_Px(reg, HEADER_MODE_FIELD);
-	
-	switch (search_state) {
-	case 0: /* searching */
-	case 1: /* first PLH detected */
-	default:
-		dprintk(FE_DEBUG, 1, "Status: Unlocked (Searching ..)");
-		state->rec_mode = 0;
-		break;
-
-	case 2: /* DVB-S2 mode */
-		state->rec_mode = 2;
-		dprintk(FE_DEBUG, 1, "Delivery system: DVB-S2");
-		if (STV090x_GETFIELD_Px(dstatus, LOCK_DEFINITIF_FIELD)) {
-			reg = STV090x_READ_DEMOD(state, PDELSTATUS1);
-			if (STV090x_GETFIELD_Px(reg, PKTDELIN_LOCK_FIELD)) {
-				*status |= FE_HAS_VITERBI;
-				reg = STV090x_READ_DEMOD(state, TSSTATUS);
-				if (STV090x_GETFIELD_Px(reg, TSFIFO_LINEOK_FIELD)) 
-					*status |= FE_HAS_SYNC | FE_HAS_LOCK;
-			}
-		}
-		break;
-
-	case 3: /* DVB-S1/legacy mode */
-		state->rec_mode = 1;
-		dprintk(FE_DEBUG, 1, "Delivery system: DVB-S");
-		if (STV090x_GETFIELD_Px(dstatus, LOCK_DEFINITIF_FIELD)) {
-			reg = STV090x_READ_DEMOD(state, VSTATUSVIT);
-                        if (STV090x_GETFIELD_Px(reg, LOCKEDVIT_FIELD)) {
-                                *status |= FE_HAS_VITERBI;
-                                reg = STV090x_READ_DEMOD(state, TSSTATUS);
-                                if (STV090x_GETFIELD_Px(reg, TSFIFO_LINEOK_FIELD))
-                                        *status |= FE_HAS_SYNC | FE_HAS_LOCK;
-                        }
-                }
-                break;
-	}
-
-	{
-		u16 val;
-		u32 ber;
-		
-		stv090x_read_cnr(fe, &val);
-		stv090x_read_signal_strength(fe, &val);
-		stv090x_ber_prop(fe, status);
-	}
-	
-	return 0;
-}
-
-static int stv090x_read_ber(struct dvb_frontend *fe, u32 *ber)
-{
-        struct stv090x_state *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-        u32 reg, h, m, l;
-        enum fe_status status;
-
-        stv090x_read_status(fe, &status);
-        if (!(status & FE_HAS_LOCK)) {
-		*ber = 1 << 23; /* Max BER */
-        } else {
-		/* Counter 1 */
-		reg = STV090x_READ_DEMOD(state, ERRCNT12);
-		h = STV090x_GETFIELD_Px(reg, ERR_CNT12_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT11);
-		m = STV090x_GETFIELD_Px(reg, ERR_CNT11_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT10);
-		l = STV090x_GETFIELD_Px(reg, ERR_CNT10_FIELD);
-
-		*ber = ((h << 16) | (m << 8) | l);
-        }
-#if 0
-	p->pre_bit_error.len = 1;
-	p->pre_bit_error.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_error.stat[0].uvalue = n;
-	p->pre_bit_count.len = 1;
-	p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_count.stat[0].uvalue = d;
-#endif
-        return 0;
-}
-
-#if 0
-static int stv090x_read_per(struct dvb_frontend *fe, u32 *per)
-{
-	struct stv090x_state *state = fe->demodulator_priv;
-
-	s32 count_4, count_3, count_2, count_1, count_0, count;
-	u32 reg, h, m, l;
-	enum fe_status status;
-
-	stv090x_read_status(fe, &status);
-	if (!(status & FE_HAS_LOCK)) {
-		*per = 1 << 23; /* Max PER */
-	} else {
-		/* Counter 2 */
-		reg = STV090x_READ_DEMOD(state, ERRCNT22);
-		h = STV090x_GETFIELD_Px(reg, ERR_CNT2_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT21);
-		m = STV090x_GETFIELD_Px(reg, ERR_CNT21_FIELD);
-
-		reg = STV090x_READ_DEMOD(state, ERRCNT20);
-		l = STV090x_GETFIELD_Px(reg, ERR_CNT20_FIELD);
-
-		*per = ((h << 16) | (m << 8) | l);
-
-		count_4 = STV090x_READ_DEMOD(state, FBERCPT4);
-		count_3 = STV090x_READ_DEMOD(state, FBERCPT3);
-		count_2 = STV090x_READ_DEMOD(state, FBERCPT2);
-		count_1 = STV090x_READ_DEMOD(state, FBERCPT1);
-		count_0 = STV090x_READ_DEMOD(state, FBERCPT0);
-
-		if ((!count_4) && (!count_3)) {
-			count  = (count_2 & 0xff) << 16;
-			count |= (count_1 & 0xff) <<  8;
-			count |=  count_0 & 0xff;
-		} else {
-			count = 1 << 24;
-		}
-		if (count == 0)
-			*per = 1;
-	}
-	if (STV090x_WRITE_DEMOD(state, FBERCPT4, 0) < 0)
-		goto err;
-	if (STV090x_WRITE_DEMOD(state, ERRCTRL2, 0xc1) < 0)
-		goto err;
-
-	return 0;
-err:
-	dprintk(FE_ERROR, 1, "I/O error");
-	return -1;
-}
-#endif
-
 static int stv090x_table_lookup(const struct stv090x_tab *tab, int max, int val)
 {
 	int res = 0;
@@ -3777,13 +3589,13 @@ static int stv090x_table_lookup(const struct stv090x_tab *tab, int max, int val)
 	return res;
 }
 
-static int stv090x_read_signal_strength(struct dvb_frontend *fe, u16 *strength)
+static int stv090x_read_rflevel(struct dvb_frontend *fe)
 {
 	struct stv090x_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	u32 reg;
 	s32 agc_0, agc_1, agc;
-	s32 str;
+	s32 rflevel;
 
 	reg = STV090x_READ_DEMOD(state, AGCIQIN1);
 	agc_1 = STV090x_GETFIELD_Px(reg, AGCIQ_VALUE_FIELD);
@@ -3791,54 +3603,27 @@ static int stv090x_read_signal_strength(struct dvb_frontend *fe, u16 *strength)
 	agc_0 = STV090x_GETFIELD_Px(reg, AGCIQ_VALUE_FIELD);
 	agc = MAKEWORD16(agc_1, agc_0);
 
-	str = stv090x_table_lookup(stv090x_rf_tab,
+	rflevel = stv090x_table_lookup(stv090x_rf_tab,
 		ARRAY_SIZE(stv090x_rf_tab) - 1, agc);
 	if (agc > stv090x_rf_tab[0].read)
-		str = 0;
+		rflevel = 0;
 	else if (agc < stv090x_rf_tab[ARRAY_SIZE(stv090x_rf_tab) - 1].read)
-		str = -100;
+		rflevel = -100;
 
 	p->strength.len = 1;
 	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	p->strength.stat[0].uvalue = 1000 * (s64) (s32) str;
-#ifdef DBVALS 
-	*strength = str;
-	p->strength.len = 1;
-	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	p->strength.stat[0].uvalue = 10 * (s64) str;
-#else
-	*strength = (str + 100) * 0xFFFF / 100;
-#endif
+	p->strength.stat[0].svalue = rflevel * 1000;
+
 	return 0;
 }
 
-static int stv090x_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
-{
-	struct stv090x_state *state = fe->demodulator_priv;
-	u8 err0, err1;
-
-	*ucblocks = 0;
-	switch (state->delsys) {
-	case STV090x_DVBS2:
-		err0 = STV090x_READ_DEMOD(state, UPCRCKO0);
-		err1 = STV090x_READ_DEMOD(state, UPCRCKO1);
-		*ucblocks = (err1 << 8) | err0;
-	default:
-		break;
-	}
-	return 0;
-}
-
-static int stv090x_read_cnr(struct dvb_frontend *fe, u16 *cnr)
+static int stv090x_read_cnr(struct dvb_frontend *fe)
 {
 	struct stv090x_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	u32 reg_0, reg_1, reg, i;
-	s32 val_0, val_1, val = 0;
+	s32 val_0, val_1, val = 0, snr = 0;
 	u8 lock_f;
-	s32 cnr_db;
-	s32 div;
-	u32 last;
 
 	switch (state->delsys) {
 	case STV090x_DVBS2:
@@ -3855,15 +3640,8 @@ static int stv090x_read_cnr(struct dvb_frontend *fe, u16 *cnr)
 				msleep(1);
 			}
 			val /= 16;
-			cnr_db = stv090x_table_lookup(stv090x_s2cn_tab,
-						      ARRAY_SIZE(stv090x_s2cn_tab) - 1, val);
-			last = ARRAY_SIZE(stv090x_s2cn_tab) - 1;
-			div = stv090x_s2cn_tab[0].read -
-			      stv090x_s2cn_tab[last].read;
-			*cnr = 0xFFFF - ((val * 0xFFFF) / div);
-		} else {
-			cnr_db = -30;
-	 	        *cnr = 0;
+			snr = stv090x_table_lookup(stv090x_s2cn_tab,
+				ARRAY_SIZE(stv090x_s2cn_tab) - 1, val);
 		}
 		break;
 
@@ -3882,26 +3660,192 @@ static int stv090x_read_cnr(struct dvb_frontend *fe, u16 *cnr)
 				msleep(1);
 			}
 			val /= 16;
-			cnr_db = stv090x_table_lookup(stv090x_s1cn_tab,
-						      ARRAY_SIZE(stv090x_s1cn_tab) - 1, val);
-			last = ARRAY_SIZE(stv090x_s1cn_tab) - 1;
-			div = stv090x_s1cn_tab[0].read -
-			      stv090x_s1cn_tab[last].read;
-			*cnr = 0xFFFF - ((val * 0xFFFF) / div);
-		} else {
-			cnr_db = -30;
-			*cnr = 0;
+			snr = stv090x_table_lookup(stv090x_s1cn_tab,
+				ARRAY_SIZE(stv090x_s1cn_tab) - 1, val);
 		}
 		break;
 	default:
 		break;
 	}
-#ifdef DBVALS
-	*cnr = cnr_db;
-#endif
+
 	p->cnr.len = 1;
 	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	p->cnr.stat[0].uvalue = 100 * (s64) cnr_db;
+	p->cnr.stat[0].svalue = 100 * snr;
+
+	return 0;
+}
+
+static int stv090x_read_per(struct dvb_frontend *fe, enum fe_status status)
+{
+	struct stv090x_state *state = fe->demodulator_priv;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	s32 count_4, count_3, count_2, count_1, count_0, count;
+	u32 reg, h, m, l, per;
+
+	if (!(status & FE_HAS_LOCK)) {
+		count = 0;
+		per = 1 << 23; /* Max PER */
+	} else {
+		/* Counter 2 */
+		reg = STV090x_READ_DEMOD(state, ERRCNT22);
+		h = STV090x_GETFIELD_Px(reg, ERR_CNT2_FIELD);
+
+		reg = STV090x_READ_DEMOD(state, ERRCNT21);
+		m = STV090x_GETFIELD_Px(reg, ERR_CNT21_FIELD);
+
+		reg = STV090x_READ_DEMOD(state, ERRCNT20);
+		l = STV090x_GETFIELD_Px(reg, ERR_CNT20_FIELD);
+
+		per = ((h << 16) | (m << 8) | l);
+
+		count_4 = STV090x_READ_DEMOD(state, FBERCPT4);
+		count_3 = STV090x_READ_DEMOD(state, FBERCPT3);
+		count_2 = STV090x_READ_DEMOD(state, FBERCPT2);
+		count_1 = STV090x_READ_DEMOD(state, FBERCPT1);
+		count_0 = STV090x_READ_DEMOD(state, FBERCPT0);
+
+		if ((!count_4) && (!count_3)) {
+			count  = (count_2 & 0xff) << 16;
+			count |= (count_1 & 0xff) <<  8;
+			count |=  count_0 & 0xff;
+		} else {
+			count = 1 << 24;
+		}
+		if (count == 0)
+			per = 1;
+	}
+	if (STV090x_WRITE_DEMOD(state, FBERCPT4, 0) < 0)
+		goto err;
+	if (STV090x_WRITE_DEMOD(state, ERRCTRL2, 0xc1) < 0)
+		goto err;
+
+	p->post_bit_error.len = 1;
+	p->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+	p->post_bit_error.stat[0].uvalue = per;
+	p->post_bit_count.len = 1;
+	p->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+	p->post_bit_count.stat[0].uvalue = count;
+
+	return 0;
+err:
+	dprintk(FE_ERROR, 1, "I/O error");
+	return -1;
+}
+
+static int stv090x_read_status(struct dvb_frontend *fe, enum fe_status *status)
+{
+	struct stv090x_state *state = fe->demodulator_priv;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+	u32 reg, dstatus;
+	u8 search_state;
+
+	*status = FE_HAS_SIGNAL;
+	stv090x_read_rflevel(fe);
+
+	dstatus = STV090x_READ_DEMOD(state, DSTATUS);
+	if (STV090x_GETFIELD_Px(dstatus, CAR_LOCK_FIELD))
+		*status |= FE_HAS_CARRIER;
+	
+	reg = STV090x_READ_DEMOD(state, DMDSTATE);
+	search_state = STV090x_GETFIELD_Px(reg, HEADER_MODE_FIELD);
+
+	switch (search_state) {
+	case 0: /* searching */
+	case 1: /* first PLH detected */
+	default:
+		dprintk(FE_DEBUG, 1, "Status: Unlocked (Searching ..)");
+		break;
+
+	case 2: /* DVB-S2 mode */
+		dprintk(FE_DEBUG, 1, "Delivery system: DVB-S2");
+		if (STV090x_GETFIELD_Px(dstatus, LOCK_DEFINITIF_FIELD)) {
+			reg = STV090x_READ_DEMOD(state, PDELSTATUS1);
+			if (STV090x_GETFIELD_Px(reg, PKTDELIN_LOCK_FIELD)) {
+				*status |= FE_HAS_VITERBI;
+				reg = STV090x_READ_DEMOD(state, TSSTATUS);
+				if (STV090x_GETFIELD_Px(reg, TSFIFO_LINEOK_FIELD))
+					*status |= FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
+			}
+		}
+		break;
+
+	case 3: /* DVB-S1/legacy mode */
+		dprintk(FE_DEBUG, 1, "Delivery system: DVB-S");
+		if (STV090x_GETFIELD_Px(dstatus, LOCK_DEFINITIF_FIELD)) {
+			reg = STV090x_READ_DEMOD(state, VSTATUSVIT);
+			if (STV090x_GETFIELD_Px(reg, LOCKEDVIT_FIELD)) {
+				*status |= FE_HAS_VITERBI;
+				reg = STV090x_READ_DEMOD(state, TSSTATUS);
+				if (STV090x_GETFIELD_Px(reg, TSFIFO_LINEOK_FIELD))
+					*status |= FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
+			}
+		}
+		break;
+	}
+
+	if (*status & FE_HAS_LOCK) {
+		stv090x_read_cnr(fe);
+		stv090x_read_per(fe, *status);
+	}
+	else {
+		p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	}
+
+	return 0;
+}
+
+static int stv090x_read_snr(struct dvb_frontend *fe, u16 *snr)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if (p->cnr.stat[0].scale == FE_SCALE_DECIBEL) {
+		 *snr = (s32)p->cnr.stat[0].svalue / 100;
+		 if (*snr > 200)
+			  *snr = 0xffff;
+		 else
+			  *snr *= 328;
+	} else *snr = 0;
+
+	return 0;
+}
+
+static int stv090x_read_ber(struct dvb_frontend *fe, u32 *ber)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if ( p->post_bit_error.stat[0].scale == FE_SCALE_COUNTER &&
+		p->post_bit_count.stat[0].scale == FE_SCALE_COUNTER )	  
+	      *ber = (u32)p->post_bit_count.stat[0].uvalue ? (u32)p->post_bit_error.stat[0].uvalue / (u32)p->post_bit_count.stat[0].uvalue : 0;
+
+	return 0;
+}
+
+static int stv090x_read_signal_strength(struct dvb_frontend *fe, u16 *strength)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	*strength = p->strength.stat[0].scale == FE_SCALE_DECIBEL ? ((100000 + (s32)p->strength.stat[0].svalue) / 1000) * 656 : 0;
+
+	return 0;
+}
+
+static int stv090x_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
+{
+	struct stv090x_state *state = fe->demodulator_priv;
+	u8 err0, err1;
+
+	*ucblocks = 0;
+	switch (state->delsys) {
+	case STV090x_DVBS2:
+		err0 = STV090x_READ_DEMOD(state, UPCRCKO0);
+		err1 = STV090x_READ_DEMOD(state, UPCRCKO1);
+		*ucblocks = (err1 << 8) | err0;
+	default:
+		break;
+	}
 	return 0;
 }
 
@@ -5085,70 +5029,6 @@ static int stv090x_get_frontend(struct dvb_frontend *fe)
 {
 	struct stv090x_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u8 tmp;
-	u32 reg = 0;
-	
-	if (state->rec_mode == 2) {
-		u32 mc;
-		enum fe_modulation modcod2mod[0x20] = {
-			QPSK, QPSK, QPSK, QPSK,
-			QPSK, QPSK, QPSK, QPSK,
-			QPSK, QPSK, QPSK, QPSK,
-			PSK_8, PSK_8, PSK_8, PSK_8,
-			PSK_8, PSK_8, APSK_16, APSK_16,
-			APSK_16, APSK_16, APSK_16, APSK_16,
-			APSK_32, APSK_32, APSK_32, APSK_32,
-			APSK_32, 
-		};
-		enum fe_code_rate modcod2fec[0x20] = {
-			FEC_NONE, FEC_1_4, FEC_1_3, FEC_2_5,
-			FEC_1_2, FEC_3_5, FEC_2_3, FEC_3_4,
-			FEC_4_5, FEC_5_6, FEC_8_9, FEC_9_10,
-			FEC_3_5, FEC_2_3, FEC_3_4, FEC_5_6,
-			FEC_8_9, FEC_9_10, FEC_2_3, FEC_3_4,
-			FEC_4_5, FEC_5_6, FEC_8_9, FEC_9_10,
-			FEC_3_4, FEC_4_5, FEC_5_6, FEC_8_9,
-			FEC_9_10
-		};		
-		mc = state->modcod;
-		p->pilot = (state->pilots & 0x01) ? PILOT_ON : PILOT_OFF;
-		p->modulation = modcod2mod[mc];
-		p->fec_inner = modcod2fec[mc];	
-        } else if (state->rec_mode == 1) {
-		reg = STV090x_READ_DEMOD(state, VITCURPUN);
-		switch( reg & 0x1F ) {
-                case 0x0d:
-			p->fec_inner = FEC_1_2;
-			break;
-                case 0x12:
-			p->fec_inner = FEC_2_3;
-			break;
-                case 0x15:
-			p->fec_inner = FEC_3_4;
-			break;
-                case 0x18:
-			p->fec_inner = FEC_5_6;
-			break;
-                case 0x1a:
-			p->fec_inner = FEC_7_8;
-			break;
-		default:
-			p->fec_inner = FEC_NONE;
-			break;
-		}
-		p->rolloff = ROLLOFF_35;
-	} else {
-		
-	}
-	
-	return 0;
-}
-
-static int get_frontend(struct dvb_frontend *fe)
-{
-	struct stv090x_state *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u8 tmp;
 	u32 reg = 0;
 	
 	if (state->rec_mode == 2) {
@@ -5244,7 +5124,7 @@ static struct dvb_frontend_ops stv090x_ops = {
 	.read_status			= stv090x_read_status,
 	.read_ber			= stv090x_read_ber,
 	.read_signal_strength		= stv090x_read_signal_strength,
-	.read_snr			= stv090x_read_cnr,
+	.read_snr			= stv090x_read_snr,
 	.read_ucblocks			= stv090x_read_ucblocks,
 };
 
