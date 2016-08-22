@@ -144,7 +144,7 @@ struct SInitTable {
 
 struct SLookup {
 	s16  Value;
-	u16  RegValue;
+	u32  RegValue;
 };
 
 static inline int i2c_write(struct i2c_adapter *adap, u8 adr,
@@ -403,6 +403,24 @@ static u8 S2CarLoop[] =	{
 	0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,
 	/* FE_32APSK_910 */
 	0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,  0x09,
+};
+
+struct SLookup PADC_Lookup[] = {
+	{-2000, 1179 }, /*PADC=-20dBm*/
+	{-1900, 1485 }, /*PADC=-19dBm*/
+	{-1700, 2354 }, /*PADC=-17dBm*/
+	{-1500, 3730 }, /*PADC=-15dBm*/
+	{-1300,	5910 }, /*PADC=-13dBm*/
+	{-1100,	9380 }, /*PADC=-11dBm*/
+	{- 900,	14850}, /*PADC=-9dBm*/
+	{- 700,	23520}, /*PADC=-7dBm*/
+	{- 600,	29650}, /*PADC=-6dBm*/
+	{- 500,	37300}, /*PADC=-5dBm*/
+	{- 400,	47000}, /*PADC=-4dBm*/
+	{- 300,	59100}, /*PADC=-3dBm*/
+	{- 200,	74500}, /*PADC=-2dBm*/
+	{- 100,	93600}, /*PADC=-1dBm*/
+	{    0,	118000}  /*PADC=+0dBm*/
 };
 
 static u8 get_optim_cloop(struct stv *state,
@@ -1256,7 +1274,6 @@ static int get_frequency_offset(struct stv *state, s32 *off)
 	return 0;
 }
 
-
 static int get_frontend(struct dvb_frontend *fe)
 {
 	struct stv *state = fe->demodulator_priv;
@@ -1321,7 +1338,6 @@ static int get_frontend(struct dvb_frontend *fe)
 	return 0;
 }
 
-
 static int ManageMatypeInfo(struct stv *state)
 {
 	if (!state->Started)
@@ -1343,67 +1359,73 @@ static int ManageMatypeInfo(struct stv *state)
 	return 0;
 }
 
-
-static int read_snr(struct dvb_frontend *fe, u16 *snr);
-static int read_signal_strength(struct dvb_frontend *fe, u16 *strength);
-static int read_ber(struct dvb_frontend *fe, u32 *ber);
-
-static int read_status(struct dvb_frontend *fe, fe_status_t *status)
+static int read_status(struct dvb_frontend *fe, enum fe_status *status)
 {
 	struct stv *state = fe->demodulator_priv;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	u8 DmdState = 0;
 	u8 DStatus  = 0;
 	enum ReceiveMode CurReceiveMode = Mode_None;
 	u32 FECLock = 0;
-	u16 val;
-	u32 ber;
-	s32 foff;
+	s32 snr;
+	u32 n, d;
+	u8 Reg[2];
+	u16 agc;
+	s32 power = 0, Padc = 0, foff = 0;
+	int i;
+
+	read_regs(state, RSTV0910_P2_AGCIQIN1 + state->regoff, Reg, 2);
+	
+	agc = (((u32) Reg[0]) << 8) | Reg[1];
+	
+	if (fe->ops.tuner_ops.get_rf_strength)
+		fe->ops.tuner_ops.get_rf_strength(fe, &agc);
+	else
+		agc = 0;
+
+	for (i = 0; i < 5; i += 1) {
+		read_regs(state, RSTV0910_P2_POWERI + state->regoff, Reg, 2);
+		power += (u32) Reg[0] * (u32) Reg[0] + (u32) Reg[1] * (u32) Reg[1];
+		msleep(3);
+	}
+	power /= 5;
+
+	Padc = TableLookup(PADC_Lookup, ARRAY_SIZE(PADC_Lookup), power) + 352;	
+
+	//pr_warn("%s: power = %d  Padc = %d  str = %u\n", __func__, power, Padc, *strength);
+	
+	p->strength.len = 1;
+	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
+	p->strength.stat[0].svalue = Padc - agc;
 
 	get_frequency_offset(state, &foff);
-	
-	read_signal_strength(fe, &val);
+	*status = FE_HAS_SIGNAL;
 
-	read_snr(fe, &val);
-	
-	read_ber(fe, &ber);
-	
 	read_reg(state, RSTV0910_P2_DMDSTATE + state->regoff, &DmdState);
+
 	if (DmdState & 0x40) {
-		read_reg(state, RSTV0910_P2_DSTATUS + state->regoff,
-			 &DStatus);
+		read_reg(state, RSTV0910_P2_DSTATUS + state->regoff, &DStatus);
+		if (DStatus & 0x80)
+			*status |= FE_HAS_CARRIER;
 		if (DStatus & 0x08)
 			CurReceiveMode = (DmdState & 0x20) ?
 				Mode_DVBS : Mode_DVBS2;
 	}
+
 	if (CurReceiveMode == Mode_None) {
 		set_vth(state);
 		//if( Time >= m_DemodTimeout ) *pLockStatus = NEVER_LOCK;
 		*status = 0;
 		return 0;
 	}
-	*status |= 0x0f;
+
 	if (state->ReceiveMode == Mode_None) {
 		state->ReceiveMode = CurReceiveMode;
 		state->DemodLockTime = jiffies;
 		state->FirstTimeLock = 1;
-
 		GetSignalParameters(state);
 		TrackingOptimization(state);
-		
-#if 0
-            if( CurReceiveMode == Mode_DVBS2 && m_bPilots
-		&& ( m_ModCod == FE_8PSK_23 || m_ModCod == FE_8PSK_35) )
-            {
-                LONG C_N;
-                CHK_ERROR(GetSignalToNoise(&C_N));
-                if( C_N < 80 )
-                {
-                    CHK_ERROR(WriteReg(RSTV0910_P2_CARHDR + m_DemodOffset , 0x04));
-                    CHK_ERROR(WriteReg(RSTV0910_P2_BCLC2S28 + m_DemodOffset , 0x31));
-                }
-            }
-#endif
-    
+
 		write_reg(state, RSTV0910_P2_TSCFGH + state->regoff,
 			  state->tscfgh);
 		usleep_range(3000, 4000);
@@ -1429,32 +1451,23 @@ static int read_status(struct dvb_frontend *fe, fe_status_t *status)
 	}
 
 	if (!FECLock)
-		//if( Time >= m_DemodLockTime + m_FecTimeout ) *pLockStatus = NEVER_LOCK;
+	{
+		p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+		p->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 		return 0;
+	}
 
-	*status |= 0x10;
+	*status |= FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
 
 	if (state->FirstTimeLock) {
 		u8 tmp;
 
 		state->FirstTimeLock = 0;
-
 		ManageMatypeInfo(state);
-		
-#if 0
-		ULONG Bitrate;
-		CSTV0910::GetBitrate(&Bitrate);
-		BYTE newTSSPEED = (Bitrate > 67000000) ? 0x30 : 0x40;
-            if (newTSSPEED != m_TSSPEED)
-            {
-		    KdPrintEx((MSG_INFO "_%d " __FUNCTION__ " TSSPEED = %02X\n", m_Instance, newTSSPEED));
-                CHK_ERROR(WriteReg(RSTV0910_P2_TSSPEED + m_DemodOffset, newTSSPEED));
-                m_TSSPEED = newTSSPEED;
-            }
-	    
-#endif
-	    if (state->ReceiveMode == Mode_DVBS2) {
-		    /* FSTV0910_P2_MANUALSX_ROLLOFF,
+
+		if (state->ReceiveMode == Mode_DVBS2) {
+			/* FSTV0910_P2_MANUALSX_ROLLOFF,
 			   FSTV0910_P2_MANUALS2_ROLLOFF = 0 */
 			state->DEMOD &= ~0x84;
 			write_reg(state, RSTV0910_P2_DEMOD + state->regoff,
@@ -1463,13 +1476,11 @@ static int read_status(struct dvb_frontend *fe, fe_status_t *status)
 				 &tmp);
 			/*reset DVBS2 packet delinator error counter */
 			tmp |= 0x40;
-			write_reg(state, RSTV0910_P2_PDELCTRL2 +
-				  state->regoff,
+			write_reg(state, RSTV0910_P2_PDELCTRL2 + state->regoff,
 				  tmp);
 			/*reset DVBS2 packet delinator error counter */
 			tmp &= ~0x40;
-			write_reg(state, RSTV0910_P2_PDELCTRL2 +
-				  state->regoff,
+			write_reg(state, RSTV0910_P2_PDELCTRL2 + state->regoff,
 				  tmp);
 
 			state->BERScale = 2;
@@ -1497,20 +1508,64 @@ static int read_status(struct dvb_frontend *fe, fe_status_t *status)
 			EnablePunctureRate(state, state->PunctureRate);
 	}
 
-#if 0
-        if( m_isVCM )
-        {
-		// Use highest signaled ModCod for quality
-		BYTE tmp;
-		CHK_ERROR(ReadReg(RSTV0910_P2_DMDMODCOD +
-				  m_DemodOffset,&tmp));
-		FE_STV0910_ModCod ModCod =
-			FE_STV0910_ModCod((tmp & 0x7c) >> 2);
+	if (GetSignalToNoise(state, &snr))
+		return -EIO;
 
-		if( ModCod > m_ModCod )
-			m_ModCod = ModCod;
-        }
-#endif
+	p->cnr.len = 1;
+	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
+	p->cnr.stat[0].svalue = snr * 100;
+
+	if (GetBitErrorRate(state, &n, &d))
+		return -EIO;
+
+	p->post_bit_error.len = 1;
+	p->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+	p->post_bit_error.stat[0].uvalue = n;
+	p->post_bit_count.len = 1;
+	p->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+	p->post_bit_count.stat[0].uvalue = d;
+
+	return 0;
+}
+
+static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	*strength = p->strength.stat[0].scale == FE_SCALE_DECIBEL ? ((100000 + (s32)p->strength.stat[0].svalue) / 1000) * 656 : 0;
+
+	return 0;
+}
+
+static int read_snr(struct dvb_frontend *fe, u16 *snr)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if (p->cnr.stat[0].scale == FE_SCALE_DECIBEL) {
+		 *snr = (s32)p->cnr.stat[0].svalue / 100;
+		 if (*snr > 200)
+			  *snr = 0xffff;
+		 else
+			  *snr *= 328;
+	} else *snr = 0;
+
+	return 0;
+}
+
+static int read_ber(struct dvb_frontend *fe, u32 *ber)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if ( p->post_bit_error.stat[0].scale == FE_SCALE_COUNTER &&
+		p->post_bit_count.stat[0].scale == FE_SCALE_COUNTER )	  
+	      *ber = (u32)p->post_bit_count.stat[0].uvalue ? (u32)p->post_bit_error.stat[0].uvalue / (u32)p->post_bit_count.stat[0].uvalue : 0;
+
+	return 0;
+}
+
+static int read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
+{
+	*ucblocks = 0;
 	return 0;
 }
 
@@ -1626,138 +1681,6 @@ static int sleep(struct dvb_frontend *fe)
 	struct stv *state = fe->demodulator_priv;
 
 	Stop(state);
-	return 0;
-}
-
-
-static int read_snr(struct dvb_frontend *fe, u16 *snr)
-{
-	struct stv *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	s32 SNR;
-
-	*snr = 0;
-	if (GetSignalToNoise(state, &SNR))
-		return -EIO;
-	*snr = SNR;
-	p->cnr.len = 1;
-	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	p->cnr.stat[0].uvalue = 100 * (s64) SNR;
-	
-	return 0;
-}
-
-static int read_ber(struct dvb_frontend *fe, u32 *ber)
-{
-	struct stv *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u32 n, d;
-
-	GetBitErrorRate(state, &n, &d);
-	if (d) 
-		*ber = n / d;
-	else
-		*ber = 0;
-
-	p->pre_bit_error.len = 1;
-	p->pre_bit_error.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_error.stat[0].uvalue = n;
-	p->pre_bit_count.len = 1;
-	p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
-	p->pre_bit_count.stat[0].uvalue = d;
-	return 0;
-}
-
-static s32 Log10x100(u32 x)
-{
-	static u32 LookupTable[100] = {
-		101157945, 103514217, 105925373, 108392691, 110917482,
-		113501082, 116144861, 118850223, 121618600, 124451461,
-		127350308, 130316678, 133352143, 136458314, 139636836,
-		142889396, 146217717, 149623566, 153108746, 156675107,
-		160324539, 164058977, 167880402, 171790839, 175792361,
-		179887092, 184077200, 188364909, 192752491, 197242274,
-		201836636, 206538016, 211348904, 216271852, 221309471,
-		226464431, 231739465, 237137371, 242661010, 248313311,
-		254097271, 260015956, 266072506, 272270131, 278612117,
-		285101827, 291742701, 298538262, 305492111, 312607937,
-		319889511, 327340695, 334965439, 342767787, 350751874,
-		358921935, 367282300, 375837404, 384591782, 393550075,
-		402717034, 412097519, 421696503, 431519077, 441570447,
-		451855944, 462381021, 473151259, 484172368, 495450191,
-		506990708, 518800039, 530884444, 543250331, 555904257,
-		568852931, 582103218, 595662144, 609536897, 623734835,
-		638263486, 653130553, 668343918, 683911647, 699841996,
-		716143410, 732824533, 749894209, 767361489, 785235635,
-		803526122, 822242650, 841395142, 860993752, 881048873,
-		901571138, 922571427, 944060876, 966050879, 988553095,
-	};
-	s32 y;
-	int i;
-
-	if (x == 0)
-		return 0;
-	y = 800;
-	if (x >= 1000000000) {
-		x /= 10;
-		y += 100;
-	}
-
-	while (x < 100000000) {
-		x *= 10;
-		y -= 100;
-	}
-	i = 0;
-	while (i < 100 && x > LookupTable[i])
-		i += 1;
-	y += i;
-	return y;
-}
-
-static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
-{
-	struct stv *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u8 Reg[2];
-	s32 bbgain;
-	s32 Power = 0;
-	int i;
-
-	read_regs(state, RSTV0910_P2_AGCIQIN1 + state->regoff, Reg, 2);
-	*strength = (((u32) Reg[0]) << 8) | Reg[1];
-	
-	for (i = 0; i < 5; i += 1) {
-		read_regs(state, RSTV0910_P2_POWERI + state->regoff, Reg, 2);
-		Power += (u32) Reg[0] * (u32) Reg[0] +
-			(u32) Reg[1] * (u32) Reg[1];
-		msleep(3);
-	}
-	Power /= 5;
-	bbgain = (465 - Log10x100(Power)) * 10;
-	
-	if (fe->ops.tuner_ops.get_rf_strength)
-		fe->ops.tuner_ops.get_rf_strength(fe, strength);
-	else
-		*strength = 0;
-
-	if (bbgain < (s32) *strength)
-		*strength -= bbgain;
-	else
-		*strength = 0;
-	
-	p->strength.len = 1;
-	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	p->strength.stat[0].uvalue = 10 * (s64) (s16) *strength - 108750;
-	
-	/* *strength is in hundredth dBuv, uvalue is in thousandth dBm */
-	return 0;
-}
-
-static int read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
-{
-	/* struct stv *state = fe->demodulator_priv; */
-
-
 	return 0;
 }
 
