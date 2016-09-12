@@ -5029,6 +5029,7 @@ static int stv090x_get_frontend(struct dvb_frontend *fe)
 {
 	struct stv090x_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
 	u32 reg = 0;
 	
 	if (state->rec_mode == 2) {
