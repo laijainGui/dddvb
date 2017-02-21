@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VER="0.9.28"
+VER="0.9.28-v7a"
 rm -f dkms.conf
 
 echo -e 'MAKE="make all KDIR=/lib/modules/${kernelver}/build"' >> dkms.conf;
