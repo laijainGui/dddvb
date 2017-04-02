@@ -399,6 +399,7 @@ static int read_t2_tlp_info(struct cxd_state *state, u8 off, u8 count, u8 *tlp)
 	return 0;
 }
 
+
 static void Active_to_Sleep(struct cxd_state *state)
 {
 	if (state->state <= Sleep)
@@ -1650,138 +1651,6 @@ static int get_tune_settings(struct dvb_frontend *fe,
 	}
 }
 
-static int read_snr(struct dvb_frontend *fe, u16 *snr);
-
-static int get_stats(struct dvb_frontend *fe)
-{
-	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u16 val;
-	s64 str;
-
-	if (fe->ops.tuner_ops.get_rf_strength)
-		fe->ops.tuner_ops.get_rf_strength(fe, &val);
-	else
-		val = 0;
-
-	str = 1000 * (s64) (s16) val;
-	str -= 108750;
-	p->strength.len = 1;
-	p->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	p->strength.stat[0].uvalue = str;
-	
-	read_snr(fe, &val);
-	p->cnr.len = 1;
-	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	p->cnr.stat[0].uvalue = 100 * (s64) (s16) val;
-	return 0;
-}
-
-
-static int read_status(struct dvb_frontend *fe, fe_status_t *status)
-{
-	struct cxd_state *state = fe->demodulator_priv;
-	u8 rdata;
-
-	get_stats(fe);
-
-	*status = 0;
-	switch (state->state) {
-	case ActiveC:
-		readregst(state, 0x40, 0x88, &rdata, 1);
-		if (rdata & 0x02)
-			break;
-		if (rdata & 0x01) {
-			*status |= 0x07;
-			readregst(state, 0x40, 0x10, &rdata, 1);
-			if (rdata & 0x20)
-				*status |= 0x1f;
-		}
-		if (*status == 0x1f && state->FirstTimeLock) {
-			readregst(state, 0x40, 0x19, &rdata, 1);
-			rdata &= 0x07;
-			state->BERScaleMax = ( rdata < 2 ) ? 18 : 19;
-			state->FirstTimeLock = 0;
-		}
-		break;
-	case ActiveT:
-		readregst(state, 0x10, 0x10, &rdata, 1);
-		if (rdata & 0x10)
-			break;
-		if ((rdata & 0x07) == 0x06) {
-			*status |= 0x07;
-			if (rdata & 0x20)
-				*status |= 0x1f;
-		}
-		if (*status == 0x1f && state->FirstTimeLock) {
-			u8 tps[7];
-			
-			read_tps(state, tps);
-			state->BERScaleMax =
-				(((tps[0] >> 6) & 0x03) < 2 ) ? 17 : 18;
-			if ((tps[0] & 7) < 2)
-				state->BERScaleMax--;
-			state->FirstTimeLock = 0;
-		}
-		break;
-	case ActiveT2:
-		readregst(state, 0x20, 0x10, &rdata, 1);
-		if (rdata & 0x10)
-			break;
-		if ((rdata & 0x07) == 0x06) {
-			*status |= 0x07;
-			if (rdata & 0x20)
-				*status |= 0x08;
-		}
-		if (*status & 0x08) {
-			readregst(state, 0x22, 0x12, &rdata, 1);
-			if (rdata & 0x01)
-				*status |= 0x10;
-		}
-		break;
-	case ActiveC2:
-		readregst(state, 0x20, 0x10, &rdata, 1);
-		if (rdata & 0x10)
-			break;
-		if ((rdata & 0x07) == 0x06) {
-			*status |= 0x07;
-			if (rdata & 0x20)
-				*status |= 0x18;
-		}
-		if ((*status & 0x10) && state->FirstTimeLock) {
-			u8 data;
-
-			/* Change1stTrial */
-			readregst(state, 0x28, 0xE6, &rdata, 1);
-			data = rdata & 1;
-			readregst(state, 0x50, 0x15, &rdata, 1);
-			data |= ((rdata & 0x18) >> 2);
-			/*writebitst(state, 0x50,0x6F,rdata,0x07);*/
-			state->FirstTimeLock = 0;
-		}
-		break;
-	case ActiveIT:
-		readregst(state, 0x60, 0x10, &rdata, 1);
-		if (rdata & 0x10)
-			break;
-		if (rdata & 0x02) {
-			*status |= 0x07;
-			if (rdata & 0x01)
-				*status |= 0x18;
-		}
-		if (*status == 0x1f && state->FirstTimeLock) {
-			/* readregst(state, 0x40, 0x19, &rdata, 1); */
-			/* rdata &= 0x07; */
-			/* state->BERScaleMax = ( rdata < 2 ) ? 18 : 19; */
-			state->FirstTimeLock = 0;
-		}
-		break;
-	default:
-		break;
-	}
-	state->last_status = *status;
-	return 0;
-}
-
 static int get_ber_t(struct cxd_state *state, u32 *n, u32 *d)
 {
 	u8 BERRegs[3];
@@ -1936,99 +1805,6 @@ static int read_ber(struct dvb_frontend *fe, u32 *ber)
 	return 0;
 }
 
-static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
-{
-	if (fe->ops.tuner_ops.get_rf_strength)
-		fe->ops.tuner_ops.get_rf_strength(fe, strength);
-	else
-		*strength = 0;
-	return 0;
-}
-
-#if 0
-+NTSTATUS CCXD2843ER::GetT2PLPIds(DD_T2_PLPIDS* pT2_PLPIDS)
- {
-     NTSTATUS status = STATUS_SUCCESS;
--    *pReturned = 0;
-+
-     if( m_DemodState != ActiveT2 ) return STATUS_NOT_IMPLEMENTED;
--    if( m_LastLockStatus < TSLock || m_LastLockStatus == Unlock ) return status;
-+    if( m_LastLockStatus < TSLock ) return status;
- 
-     do
-     {
-+        u8 tmp;
-+
-         CHK_ERROR(FreezeRegsT());
- 
-+        CHK_ERROR(ReadRegT(0x20,0x5C,&tmp)); // OFDM Info
-+
-+        if( tmp & 0x20 ) pT2_PLPIDS->Flags |= DD_T2_PLPIDS_FEF;
-+        if( m_T2Profile == T2P_Lite ) pT2_PLPIDS->Flags |= DD_T2_PLPIDS_LITE;
-+
-+        CHK_ERROR(ReadRegT(0x22,0x54,&tmp));
-+        pT2_PLPIDS->PLPID = tmp;
-+
-+        CHK_ERROR(ReadRegT(0x22,0x54 + 19 + 13,&tmp));    // Interval
-+        if( tmp > 0 )
-+        {
-+            CHK_ERROR(ReadRegT(0x22,0x54 + 19,&tmp));
-+            pT2_PLPIDS->CommonPLPID = tmp;
-+        }
-+
-         u8 nPids = 0;
-         CHK_ERROR(ReadRegT(0x22,0x7F,&nPids));
- 
--        pValues[0] = nPids;
--        if( nPids >= nValues ) nPids = nValues - 1;
-+        pT2_PLPIDS->NumPLPS = nPids;
-+        CHK_ERROR(ReadRegT(0x22,0x80,&pT2_PLPIDS->PLPList[0], nPids > 128 ? 128 : nPids));
- 
--        CHK_ERROR(ReadRegT(0x22,0x80,&pValues[1], nPids > 128 ? 128 : nPids));
--
-         if( nPids > 128 )
-         {
--            CHK_ERROR(ReadRegT(0x23,0x10,&pValues[129], nPids - 128));
-+            CHK_ERROR(ReadRegT(0x23,0x10,&pT2_PLPIDS->PLPList[128], nPids - 128));
-         }
- 
--        *pReturned = nPids + 1;
-+
-     }
-     while(0);
-     UnFreezeRegsT();
-
-static void GetPLPIds(struct cxd_state *state, u32 nValues,
-		      u8 *Values, u32 *Returned)
-{
-	u8 nPids = 0, tmp;
-
-	*Returned = 0;
-	if (state->state != ActiveT2)
-		return;
-	if (state->last_status != 0x1f)
-		return;
-
-	freeze_regst(state);
-	readregst_unlocked(state, 0x22, 0x7F, &nPids, 1);
-
-	Values[0] = nPids;
-	if (nPids >= nValues)
-		nPids = nValues - 1;
-
-	readregst_unlocked(state, 0x22, 0x80, &Values[1],
-			   nPids > 128 ? 128 : nPids);
-
-	if (nPids > 128)
-		readregst_unlocked(state, 0x23, 0x10, &Values[129],
-				   nPids - 128);
-
-	*Returned = nPids + 1;
-
-	unfreeze_regst(state);
-}
-#endif
-
 static void GetSignalToNoiseIT(struct cxd_state *state, u32 *SignalToNoise)
 {
 	u8 Data[2];
@@ -2145,39 +1921,173 @@ static void GetSignalToNoiseC(struct cxd_state *state, u32 *SignalToNoise)
 	}
 }
 
-static int read_snr(struct dvb_frontend *fe, u16 *snr)
+static int read_status(struct dvb_frontend *fe, fe_status_t *status)
 {
 	struct cxd_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
-	u32 SNR = 0;
+	u8 rdata;
+	u16 val;
+	s64 str;
+	u32 snr;
 
-	*snr = 0;
-	if (state->last_status != 0x1f)
-		return 0;
+	p->strength.len = 1;
+	p->strength.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
+	if (fe->ops.tuner_ops.get_rf_strength) {
+		fe->ops.tuner_ops.get_rf_strength(fe, &val);
+		str = 1000 * (s64) (s16) val;
+		str -= 108750;
+		p->strength.stat[0].scale = FE_SCALE_DECIBEL;
+		p->strength.stat[0].uvalue = str;
+	}
+		
+
+	p->cnr.len = 1;
+	p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+
+	if (state->last_status == 0x1f) {
+		switch (state->state) {
+		case ActiveC:
+			GetSignalToNoiseC(state, &snr);
+			break;
+		case ActiveC2:
+			GetSignalToNoiseC2(state, &snr);
+			break;
+		case ActiveT:
+			GetSignalToNoiseT(state, &snr);
+			break;
+		case ActiveT2:
+			GetSignalToNoiseT2(state, &snr);
+			break;
+		case ActiveIT:
+			GetSignalToNoiseIT(state, &snr);
+			break;
+		default:
+			break;
+		}
+		p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
+		p->cnr.stat[0].uvalue = 100 * (s64) snr; 
+	}
+
+	*status = 0;
 	switch (state->state) {
 	case ActiveC:
-		GetSignalToNoiseC(state, &SNR);
-		break;
-	case ActiveC2:
-		GetSignalToNoiseC2(state, &SNR);
+		readregst(state, 0x40, 0x88, &rdata, 1);
+		if (rdata & 0x02)
+			break;
+		if (rdata & 0x01) {
+			*status |= 0x07;
+			readregst(state, 0x40, 0x10, &rdata, 1);
+			if (rdata & 0x20)
+				*status |= 0x1f;
+		}
+		if (*status == 0x1f && state->FirstTimeLock) {
+			readregst(state, 0x40, 0x19, &rdata, 1);
+			rdata &= 0x07;
+			state->BERScaleMax = ( rdata < 2 ) ? 18 : 19;
+			state->FirstTimeLock = 0;
+		}
 		break;
 	case ActiveT:
-		GetSignalToNoiseT(state, &SNR);
+		readregst(state, 0x10, 0x10, &rdata, 1);
+		if (rdata & 0x10)
+			break;
+		if ((rdata & 0x07) == 0x06) {
+			*status |= 0x07;
+			if (rdata & 0x20)
+				*status |= 0x1f;
+		}
+		if (*status == 0x1f && state->FirstTimeLock) {
+			u8 tps[7];
+			
+			read_tps(state, tps);
+			state->BERScaleMax =
+				(((tps[0] >> 6) & 0x03) < 2 ) ? 17 : 18;
+			if ((tps[0] & 7) < 2)
+				state->BERScaleMax--;
+			state->FirstTimeLock = 0;
+		}
 		break;
 	case ActiveT2:
-		GetSignalToNoiseT2(state, &SNR);
+		readregst(state, 0x20, 0x10, &rdata, 1);
+		if (rdata & 0x10)
+			break;
+		if ((rdata & 0x07) == 0x06) {
+			*status |= 0x07;
+			if (rdata & 0x20)
+				*status |= 0x08;
+		}
+		if (*status & 0x08) {
+			readregst(state, 0x22, 0x12, &rdata, 1);
+			if (rdata & 0x01)
+				*status |= 0x10;
+		}
+		break;
+	case ActiveC2:
+		readregst(state, 0x20, 0x10, &rdata, 1);
+		if (rdata & 0x10)
+			break;
+		if ((rdata & 0x07) == 0x06) {
+			*status |= 0x07;
+			if (rdata & 0x20)
+				*status |= 0x18;
+		}
+		if ((*status & 0x10) && state->FirstTimeLock) {
+			u8 data;
+
+			/* Change1stTrial */
+			readregst(state, 0x28, 0xE6, &rdata, 1);
+			data = rdata & 1;
+			readregst(state, 0x50, 0x15, &rdata, 1);
+			data |= ((rdata & 0x18) >> 2);
+			/*writebitst(state, 0x50,0x6F,rdata,0x07);*/
+			state->FirstTimeLock = 0;
+		}
 		break;
 	case ActiveIT:
-		GetSignalToNoiseIT(state, &SNR);
+		readregst(state, 0x60, 0x10, &rdata, 1);
+		if (rdata & 0x10)
+			break;
+		if (rdata & 0x02) {
+			*status |= 0x07;
+			if (rdata & 0x01)
+				*status |= 0x18;
+		}
+		if (*status == 0x1f && state->FirstTimeLock) {
+			/* readregst(state, 0x40, 0x19, &rdata, 1); */
+			/* rdata &= 0x07; */
+			/* state->BERScaleMax = ( rdata < 2 ) ? 18 : 19; */
+			state->FirstTimeLock = 0;
+		}
 		break;
 	default:
 		break;
 	}
-	*snr = SNR;
-	p->cnr.len = 1;
-	p->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	p->cnr.stat[0].uvalue = 10 * (s64) SNR; 
+	state->last_status = *status;
+	return 0;
+}
+
+static int read_signal_strength(struct dvb_frontend *fe, u16 *strength)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	*strength = p->strength.stat[0].scale == FE_SCALE_DECIBEL ? ((100000 + (s32)p->strength.stat[0].svalue) / 1000) * 656 : 0;
+
+	return 0;
+}
+
+static int read_snr(struct dvb_frontend *fe, u16 *snr)
+{
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
+
+	if (p->cnr.stat[0].scale == FE_SCALE_DECIBEL) {
+		 *snr = (s32)p->cnr.stat[0].svalue / 100;
+		 if (*snr > 500)
+			  *snr = 0xffff;
+		 else
+			  *snr *= 131;
+	} else *snr = 0;
+
 	return 0;
 }
 
