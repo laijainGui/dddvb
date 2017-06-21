@@ -1,25 +1,29 @@
 all: cit citin flashprog modt ddtest setmod ddflash setmod2
 
 cit: cit.c
-	gcc -o cit cit.c -lpthread
+	$(CC) -o cit cit.c -lpthread
 
 modt: modt.c
-	gcc -o modt modt.c -lpthread
+	$(CC) -o modt modt.c -lpthread
 
 setmod: setmod.c
-	gcc -o setmod setmod.c -I../include/
+	$(CC) -o setmod setmod.c -I../include/
 
 setmod2: setmod2.c
-	gcc -o setmod2 setmod2.c -I../include/
+	$(CC) -o setmod2 setmod2.c -I../include/
 
 flashprog: flashprog.c
-	gcc -o flashprog flashprog.c
+	$(CC) -o flashprog flashprog.c
 
 ddtest: ddtest.c
-	gcc -o ddtest ddtest.c
+	$(CC) -o ddtest ddtest.c
 
 ddflash: ddflash.c
+<<<<<<< HEAD
 	gcc -o ddflash ddflash.c
 
 clean:
 	rm -rf cit citin flashprog modt ddtest setmod ddflash
+=======
+	$(CC) -o ddflash ddflash.c
+>>>>>>> 933779aa24b643c4bdb72cbf7998eb96b9727084
