@@ -516,7 +516,7 @@ static int mod_fsm_setup(struct ddb *dev, u32 FrequencyPlan,
 	else
 		ddbwritel(dev, FSM_GAIN_N96, FSM_GAIN);
 
-	ddbwritel(dev, FSM_CONTROL_ENABLE, FSM_CONTROL);
+	dev->link[0].info->port_num = MaxUsedChannels;
 
 	return status;
 }
@@ -1497,6 +1497,12 @@ static int mod3_prop_proc(struct ddb_mod *mod, struct dtv_property *tvp)
 
 	case MODULATOR_BASE_FREQUENCY:
 		return mod3_set_base_frequency(mod->port->dev, tvp->u.data);
+      
+	case MODULATOR_ATTENUATOR:
+		return mod_set_attenuator(mod->port->dev, tvp->u.data);
+      
+	case MODULATOR_GAIN:
+		return mod_set_vga(mod->port->dev, tvp->u.data);
 	}
 	return -EINVAL;
 }
@@ -1521,6 +1527,10 @@ static int mod_prop_proc(struct ddb_mod *mod, struct dtv_property *tvp)
 	case MODULATOR_INPUT_BITRATE:
 		return mod_set_ibitrate(mod, tvp->u.data);
 
+	case MODULATOR_GAIN:
+		if (mod->port->dev->link[0].info->version == 2)
+			return mod_set_vga(mod->port->dev, tvp->u.data);
+		return -EINVAL;
 	}
 	return 0;
 }
@@ -1626,7 +1636,6 @@ static int mod_init_2(struct ddb *dev, u32 Frequency)
 		pr_err("FSM setup failed!\n");
 		return -1;
 	}
-
 	for (i = 0; i < streams; i++) {
 		struct ddb_mod *mod = &dev->mod[i];
 
@@ -1635,13 +1644,6 @@ static int mod_init_2(struct ddb *dev, u32 Frequency)
 		mod_set_symbolrate(mod, 6900000);
 		mod_set_frequency(mod, dev->mod_base.frequency + i * 8000000);
 	}
-	if (streams <= 8)
-		mod_set_vga(dev, RF_VGA_GAIN_N8);
-	else if (streams <= 16)
-		mod_set_vga(dev, RF_VGA_GAIN_N16);
-	else
-		mod_set_vga(dev, RF_VGA_GAIN_N24);
-
 	mod_set_attenuator(dev, 0);
 	return 0;
 }
@@ -1738,7 +1740,6 @@ static int mod_init_3(struct ddb *dev, u32 Frequency)
 	int streams = dev->link[0].info->port_num;
 	int i, ret = 0;
 
-	mod_set_vga(dev, 64);
 	ret = mod_setup_max2871(dev, max2871_sdr);
 	if (ret)
 		pr_err("DDBridge: PLL setup failed\n");
@@ -1768,9 +1769,11 @@ static int mod_init_3(struct ddb *dev, u32 Frequency)
 		mod3_set_frequency(mod, Frequency + 7000000 * i);
 
 		ddbwritel(dev, 0x00011f80, SDR_CHANNEL_RGAIN(i));
-		ddbwritel(dev, 0x00001000, SDR_CHANNEL_FM1GAIN(i));
-		ddbwritel(dev, 0x00000800, SDR_CHANNEL_FM2GAIN(i));
+		ddbwritel(dev, 0x00002000, SDR_CHANNEL_FM1GAIN(i));
+		ddbwritel(dev, 0x00001000, SDR_CHANNEL_FM2GAIN(i));
 	}
+	mod_set_attenuator(dev, 0);
+	mod_set_vga(dev, 64);
 	return ret;
 }
 

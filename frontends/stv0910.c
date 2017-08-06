@@ -691,6 +691,7 @@ static int GetBitErrorRateS(struct stv *state, u32 *BERNumerator,
 static u32 DVBS2_nBCH(enum DVBS2_ModCod ModCod, enum DVBS2_FECType FECType)
 {
 	static u32 nBCH[][2] = {
+		{    0,     0}, /* dummy */
 		{16200,  3240}, /* QPSK_1_4, */
 		{21600,  5400}, /* QPSK_1_3, */
 		{25920,  6480}, /* QPSK_2_5, */
@@ -723,7 +724,7 @@ static u32 DVBS2_nBCH(enum DVBS2_ModCod ModCod, enum DVBS2_FECType FECType)
 
 	if (ModCod >= DVBS2_QPSK_1_4 &&
 	    ModCod <= DVBS2_32APSK_9_10 && FECType <= DVBS2_16K)
-		return nBCH[FECType][ModCod];
+		return nBCH[ModCod][FECType];
 	return 64800;
 }
 
@@ -1588,7 +1589,6 @@ static int tune(struct dvb_frontend *fe, bool re_tune,
 			return r;
 		state->tune_time = jiffies;
 	}
-
 	r = read_status(fe, status);
 	if (r)
 		return r;
@@ -1596,7 +1596,7 @@ static int tune(struct dvb_frontend *fe, bool re_tune,
 	if (*status & FE_HAS_LOCK)
 		return 0;
 
-	*delay = HZ;
+	*delay = HZ / 10;
 	return 0;
 }
 
@@ -1705,7 +1705,8 @@ static struct dvb_frontend_ops stv0910_ops = {
 		.caps			= FE_CAN_INVERSION_AUTO |
 					  FE_CAN_FEC_AUTO       |
 					  FE_CAN_QPSK           |
-					  FE_CAN_2G_MODULATION
+					  FE_CAN_2G_MODULATION  |
+		                          FE_CAN_MULTISTREAM,
 	},
 	.init				= init,
 	.sleep				= sleep,

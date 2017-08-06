@@ -26,6 +26,20 @@
 
 DEFINE_MUTEX(redirect_lock);
 
+static struct workqueue_struct *ddb_wq;
+
+static int adapter_alloc;
+module_param(adapter_alloc, int, 0444);
+MODULE_PARM_DESC(adapter_alloc,
+		 "0-one adapter per io, 1-one per tab with io, 2-one per tab, 3-one for all");
+
+#ifdef CONFIG_PCI_MSI
+static int msi = 1;
+module_param(msi, int, 0444);
+MODULE_PARM_DESC(msi,
+		 " Control MSI interrupts: 0-disable, 1-enable (default)");
+#endif
+
 static int ci_bitrate = 70000;
 module_param(ci_bitrate, int, 0444);
 MODULE_PARM_DESC(ci_bitrate, " Bitrate in KHz for output to CI.");
@@ -37,10 +51,6 @@ MODULE_PARM_DESC(ts_loop, "TS in/out test loop on port ts_loop");
 static int vlan;
 module_param(vlan, int, 0444);
 MODULE_PARM_DESC(vlan, "VLAN and QoS IDs enabled");
-
-static int tt;
-module_param(tt, int, 0444);
-MODULE_PARM_DESC(tt, "");
 
 static int fmode;
 module_param(fmode, int, 0444);
@@ -82,316 +92,7 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 #include "ddbridge-mod.c"
 #include "ddbridge-i2c.c"
 #include "ddbridge-ns.c"
-
-
-/****************************************************************************/
-/****************************************************************************/
-/****************************************************************************/
-
-static struct ddb_regset octopus_mod_odma = {
-	.base = 0x300,
-	.num  = 0x0a,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_mod_odma_buf = {
-	.base = 0x2000,
-	.num  = 0x0a,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopus_mod_channel = {
-	.base = 0x400,
-	.num  = 0x0a,
-	.size = 0x40,
-};
-
-/****************************************************************************/
-
-static struct ddb_regset octopus_mod_2_odma = {
-	.base = 0x400,
-	.num  = 0x18,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_mod_2_odma_buf = {
-	.base = 0x8000,
-	.num  = 0x18,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopus_mod_2_channel = {
-	.base = 0x800,
-	.num  = 0x18,
-	.size = 0x40,
-};
-
-static struct ddb_regset octopus_sdr_output = {
-	.base = 0x240,
-	.num  = 0x14,
-	.size = 0x10,
-};
-
-/****************************************************************************/
-
-static struct ddb_regset octopus_input = {
-	.base = 0x200,
-	.num  = 0x08,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_output = {
-	.base = 0x280,
-	.num  = 0x08,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_idma = {
-	.base = 0x300,
-	.num  = 0x08,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_idma_buf = {
-	.base = 0x2000,
-	.num  = 0x08,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopus_odma = {
-	.base = 0x380,
-	.num  = 0x04,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopus_odma_buf = {
-	.base = 0x2800,
-	.num  = 0x04,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopus_i2c = {
-	.base = 0x80,
-	.num  = 0x04,
-	.size = 0x20,
-};
-
-static struct ddb_regset octopus_i2c_buf = {
-	.base = 0x1000,
-	.num  = 0x04,
-	.size = 0x200,
-};
-
-/****************************************************************************/
-
-static struct ddb_regset octopro_input = {
-	.base = 0x400,
-	.num  = 0x14,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopro_output = {
-	.base = 0x600,
-	.num  = 0x0a,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopro_idma = {
-	.base = 0x800,
-	.num  = 0x40,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopro_idma_buf = {
-	.base = 0x4000,
-	.num  = 0x40,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopro_odma = {
-	.base = 0xc00,
-	.num  = 0x20,
-	.size = 0x10,
-};
-
-static struct ddb_regset octopro_odma_buf = {
-	.base = 0x8000,
-	.num  = 0x20,
-	.size = 0x100,
-};
-
-static struct ddb_regset octopro_i2c = {
-	.base = 0x200,
-	.num  = 0x0a,
-	.size = 0x20,
-};
-
-static struct ddb_regset octopro_i2c_buf = {
-	.base = 0x2000,
-	.num  = 0x0a,
-	.size = 0x200,
-};
-
-static struct ddb_regset octopro_gtl = {
-	.base = 0xe00,
-	.num  = 0x03,
-	.size = 0x40,
-};
-
-/****************************************************************************/
-/****************************************************************************/
-
-
-static struct ddb_regmap octopus_map = {
-	.irq_version = 1,
-	.irq_base_i2c = 0,
-	.irq_base_idma = 8,
-	.irq_base_odma = 16,
-	.i2c = &octopus_i2c,
-	.i2c_buf = &octopus_i2c_buf,
-	.idma = &octopus_idma,
-	.idma_buf = &octopus_idma_buf,
-	.odma = &octopus_odma,
-	.odma_buf = &octopus_odma_buf,
-	.input = &octopus_input,
-	.output = &octopus_output,
-};
-
-static struct ddb_regmap octopro_map = {
-	.irq_version = 2,
-	.irq_base_i2c = 32,
-	.irq_base_idma = 64,
-	.irq_base_odma = 128,
-	.irq_base_gtl = 8,
-	.i2c = &octopro_i2c,
-	.i2c_buf = &octopro_i2c_buf,
-	.idma = &octopro_idma,
-	.idma_buf = &octopro_idma_buf,
-	.odma = &octopro_odma,
-	.odma_buf = &octopro_odma_buf,
-	.input = &octopro_input,
-	.output = &octopro_output,
-	.gtl = &octopro_gtl,
-};
-
-static struct ddb_regmap octopro_hdin_map = {
-	.irq_version = 2,
-	.irq_base_i2c = 32,
-	.irq_base_idma = 64,
-	.irq_base_odma = 128,
-	.i2c = &octopro_i2c,
-	.i2c_buf = &octopro_i2c_buf,
-	.idma = &octopro_idma,
-	.idma_buf = &octopro_idma_buf,
-	.odma = &octopro_odma,
-	.odma_buf = &octopro_odma_buf,
-	.input = &octopro_input,
-	.output = &octopro_output,
-};
-
-static struct ddb_regmap octopus_mod_map = {
-	.irq_version = 1,
-	.irq_base_odma = 8,
-	.irq_base_rate = 18,
-	.output = &octopus_output,
-	.odma = &octopus_mod_odma,
-	.odma_buf = &octopus_mod_odma_buf,
-	.channel = &octopus_mod_channel,
-};
-
-static struct ddb_regmap octopus_mod_2_map = {
-	.irq_version = 2,
-	.irq_base_odma = 64,
-	.irq_base_rate = 32,
-	.output = &octopus_output,
-	.odma = &octopus_mod_2_odma,
-	.odma_buf = &octopus_mod_2_odma_buf,
-	.channel = &octopus_mod_2_channel,
-};
-
-static struct ddb_regmap octopus_sdr_map = {
-	.irq_version = 2,
-	.irq_base_odma = 64,
-	.irq_base_rate = 32,
-	.output = &octopus_sdr_output,
-	.odma = &octopus_mod_2_odma,
-	.odma_buf = &octopus_mod_2_odma_buf,
-	.channel = &octopus_mod_2_channel,
-};
-
-
-/****************************************************************************/
-
-static struct ddb_info ddb_s2_48 = {
-	.type     = DDB_OCTOPUS_MAX,
-	.name     = "Digital Devices MAX S8 4/8",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x01,
-	.board_control = 1,
-	.tempmon_irq = 24,
-};
-
-static struct ddb_info ddb_ct2_8 = {
-	.type     = DDB_OCTOPUS_MAX_CT,
-	.name     = "Digital Devices MAX A8 CT2",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x0f,
-	.board_control   = 0x0ff,
-	.board_control_2 = 0xf00,
-	.ts_quirks = TS_QUIRK_SERIAL,
-	.tempmon_irq = 24,
-};
-
-static struct ddb_info ddb_c2t2_8 = {
-	.type     = DDB_OCTOPUS_MAX_CT,
-	.name     = "Digital Devices MAX A8 C2T2",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x0f,
-	.board_control   = 0x0ff,
-	.board_control_2 = 0xf00,
-	.ts_quirks = TS_QUIRK_SERIAL,
-	.tempmon_irq = 24,
-};
-
-static struct ddb_info ddb_isdbt_8 = {
-	.type     = DDB_OCTOPUS_MAX_CT,
-	.name     = "Digital Devices MAX A8 ISDBT",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x0f,
-	.board_control   = 0x0ff,
-	.board_control_2 = 0xf00,
-	.ts_quirks = TS_QUIRK_SERIAL,
-	.tempmon_irq = 24,
-};
-
-static struct ddb_info ddb_c2t2i_v0_8 = {
-	.type     = DDB_OCTOPUS_MAX_CT,
-	.name     = "Digital Devices MAX A8 C2T2I V0",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x0f,
-	.board_control   = 0x0ff,
-	.board_control_2 = 0xf00,
-	.ts_quirks = TS_QUIRK_SERIAL | TS_QUIRK_ALT_OSC,
-	.tempmon_irq = 24,
-};
-
-static struct ddb_info ddb_c2t2i_8 = {
-	.type     = DDB_OCTOPUS_MAX_CT,
-	.name     = "Digital Devices MAX A8 C2T2I",
-	.regmap   = &octopus_map,
-	.port_num = 4,
-	.i2c_mask = 0x0f,
-	.board_control   = 0x0ff,
-	.board_control_2 = 0xf00,
-	.ts_quirks = TS_QUIRK_SERIAL,
-	.tempmon_irq = 24,
-};
-
+#include "ddbridge-hw.c"
 
 /****************************************************************************/
 /****************************************************************************/
@@ -498,9 +199,9 @@ static int ddb_redirect(u32 i, u32 p)
 	struct ddb *pdev = ddbs[(p >> 4) & 0x3f];
 	struct ddb_port *port;
 
-	if (!idev->has_dma || !pdev->has_dma)
+	if (!pdev || !idev)
 		return -EINVAL;
-	if (!idev || !pdev)
+	if (!pdev->has_dma || !idev->has_dma)
 		return -EINVAL;
 
 	port = &pdev->port[p & 0x0f];
@@ -685,6 +386,7 @@ static void calc_con(struct ddb_output *output, u32 *con, u32 *con2, u32 flags)
 	if (output->port->gap != 0xffffffff) {
 		flags |= 1;
 		gap = output->port->gap;
+		max_bitrate = 0;
 	}
 	if (dev->link[0].info->type == DDB_OCTOPUS_CI && output->port->nr > 1) {
 		*con = 0x10c;
@@ -4719,7 +4421,7 @@ static ssize_t bpsnr_show(struct device *device,
 			 struct device_attribute *attr, char *buf)
 {
 	struct ddb *dev = dev_get_drvdata(device);
-	char snr[32];
+	unsigned char snr[32];
 
 	if (!dev->i2c_num)
 		return 0;
@@ -5209,28 +4911,10 @@ static int ddb_gtl_init_link(struct ddb *dev, u32 l)
 	}
 	id = ddbreadl(dev, DDB_LINK_TAG(l) | 8);
 	subid = ddbreadl(dev, DDB_LINK_TAG(l) | 12);
-	switch (id) {
-	case 0x0007dd01:
-		link->info = &ddb_s2_48;
-		break;
-	case 0x0008dd01:
-		switch (subid) {
-		case 0x0035dd01:
-		default:
-			link->info = &ddb_c2t2_8;
-			break;
-		case 0x0036dd01:
-			link->info = &ddb_isdbt_8;
-			break;
-		case 0x0037dd01:
-			link->info = &ddb_c2t2i_v0_8;
-			break;
-		case 0x0038dd01:
-			link->info = &ddb_c2t2i_8;
-			break;
-		}
-		break;
-	default:
+	link->info = get_ddb_info(id & 0xffff, id >> 16,
+				  subid & 0xffff, subid >> 16);
+	if (link->info->type != DDB_OCTOPUS_MAX_CT &&
+	    link->info->type != DDB_OCTOPUS_MAX) {
 		pr_info("DDBridge: Detected GT link but found invalid ID %08x. You might have to update (flash) the add-on card first.",
 			id);
 		return -1;
@@ -5479,3 +5163,11 @@ static void ddb_reset_ios(struct ddb *dev)
 				     rm->output->base + i * rm->output->size);
 	usleep_range(5000, 6000);
 }
+
+static void ddb_unmap(struct ddb *dev)
+{
+	if (dev->regs)
+		iounmap(dev->regs);
+	vfree(dev);
+}
+

@@ -748,6 +748,10 @@ void ddbridge_mod_rate_handler(unsigned long data);
 
 int ddbridge_flashread(struct ddb *dev, u32 link, u8 *buf, u32 addr, u32 len);
 
-#define DDBRIDGE_VERSION "0.9.29"
+#define DDBRIDGE_VERSION "0.9.30"
+
+/* linked functions */
+
+struct ddb_info *get_ddb_info(u16 vendor, u16 device, u16 subvendor, u16 subdevice);
 
 #endif
