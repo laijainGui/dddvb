@@ -1,5 +1,5 @@
 /*
- * ddbridge.c: Digital Devices PCIe bridge driver
+ * ddbridge-modulator.c: Digital Devices modulator cards
  *
  * Copyright (C) 2010-2017 Digital Devices GmbH
  *                         Marcus Metzler <mocm@metzlerbros.de>
@@ -24,7 +24,7 @@
  */
 
 #include "ddbridge.h"
-#include "ddbridge-regs.h"
+#include "ddbridge-io.h"
 
 #include <linux/dvb/mod.h>
 
@@ -378,7 +378,7 @@ int ddbridge_mod_output_start(struct ddb_output *output)
 					   CHANNEL_CONTROL_CMD_SETUP))
 			return -EINVAL;
 		mod->Control |= CHANNEL_CONTROL_ENABLE_DVB;
-	} else if (dev->link[0].info->version == 1) {
+	} else if (dev->link[0].info->version <= 1) {
 		/* QAM: 600 601 602 903 604 = 16 32 64 128 256 */
 		/* ddbwritel(dev, 0x604, CHANNEL_SETTINGS(output->nr)); */
 		ddbwritel(dev, qamtab[mod->modulation],
@@ -516,6 +516,7 @@ static int mod_fsm_setup(struct ddb *dev, u32 FrequencyPlan,
 	else
 		ddbwritel(dev, FSM_GAIN_N96, FSM_GAIN);
 
+	ddbwritel(dev, FSM_CONTROL_ENABLE, FSM_CONTROL);
 	dev->link[0].info->port_num = MaxUsedChannels;
 
 	return status;
@@ -1644,6 +1645,13 @@ static int mod_init_2(struct ddb *dev, u32 Frequency)
 		mod_set_symbolrate(mod, 6900000);
 		mod_set_frequency(mod, dev->mod_base.frequency + i * 8000000);
 	}
+	if (streams <= 8)
+		mod_set_vga(dev, RF_VGA_GAIN_N8);
+	else if (streams <= 16)
+		mod_set_vga(dev, RF_VGA_GAIN_N16);
+	else
+		mod_set_vga(dev, RF_VGA_GAIN_N24);
+	
 	mod_set_attenuator(dev, 0);
 	return 0;
 }

@@ -23,13 +23,17 @@
  * 02110-1301, USA
  * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  */
-
-#define DDB_USE_WORK
-/*#define DDB_TEST_THREADED*/
-
 #include "ddbridge.h"
-#include "ddbridge-regs.h"
-#include "ddbridge-core.c"
+#include "ddbridge-io.h"
+
+#ifdef CONFIG_PCI_MSI
+static int msi = 1;
+module_param(msi, int, 0444);
+MODULE_PARM_DESC(msi,
+		 " Control MSI interrupts: 0-disable, 1-enable (default)");
+#endif
+
+extern struct workqueue_struct *ddb_wq;
 
 /****************************************************************************/
 /****************************************************************************/
@@ -282,7 +286,7 @@ static int __devinit ddb_probe(struct pci_dev *pdev,
 		ddbwritel(dev, 0, DMA_BASE_WRITE);
 
 	if (dev->link[0].info->type == DDB_MOD) {
-		if (dev->link[0].info->version == 1)
+		if (dev->link[0].info->version <= 1)
 			if (ddbreadl(dev, 0x1c) == 4)
 				dev->link[0].info->port_num = 4;
 	}

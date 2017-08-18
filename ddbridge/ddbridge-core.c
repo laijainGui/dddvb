@@ -24,21 +24,19 @@
  * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  */
 
-DEFINE_MUTEX(redirect_lock);
+#include "ddbridge.h"
+#include "ddbridge-i2c.h"
+#include "ddbridge-io.h"
+#include "dvb_net.h"
 
-static struct workqueue_struct *ddb_wq;
+struct workqueue_struct *ddb_wq;
+
+DEFINE_MUTEX(redirect_lock);
 
 static int adapter_alloc;
 module_param(adapter_alloc, int, 0444);
 MODULE_PARM_DESC(adapter_alloc,
 		 "0-one adapter per io, 1-one per tab with io, 2-one per tab, 3-one for all");
-
-#ifdef CONFIG_PCI_MSI
-static int msi = 1;
-module_param(msi, int, 0444);
-MODULE_PARM_DESC(msi,
-		 " Control MSI interrupts: 0-disable, 1-enable (default)");
-#endif
 
 static int ci_bitrate = 70000;
 module_param(ci_bitrate, int, 0444);
@@ -89,10 +87,6 @@ static struct ddb *ddbs[DDB_MAX_ADAPTER];
 
 DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 
-#include "ddbridge-mod.c"
-#include "ddbridge-i2c.c"
-#include "ddbridge-ns.c"
-#include "ddbridge-hw.c"
 
 /****************************************************************************/
 /****************************************************************************/
@@ -336,7 +330,7 @@ static int ddb_buffers_alloc(struct ddb *dev)
 	return 0;
 }
 
-static void ddb_buffers_free(struct ddb *dev)
+void ddb_buffers_free(struct ddb *dev)
 {
 	int i;
 	struct ddb_port *port;
@@ -423,6 +417,7 @@ static void calc_con(struct ddb_output *output, u32 *con, u32 *con2, u32 flags)
 				*con |= 0x810;  /* 96 MBit/s and gap */
 				max_bitrate = 96000;
 			}
+			*con |= 0x10;  /* enable gap */
 		}
 	}
 	if (max_bitrate > 0) {
@@ -550,7 +545,7 @@ static void ddb_input_start(struct ddb_input *input)
 }
 
 
-static int ddb_dvb_ns_input_start(struct ddb_input *input)
+int ddb_dvb_ns_input_start(struct ddb_input *input)
 {
 	struct ddb_dvb *dvb = &input->port->dvb[input->nr & 1];
 
@@ -560,7 +555,7 @@ static int ddb_dvb_ns_input_start(struct ddb_input *input)
 	return ++dvb->users;
 }
 
-static int ddb_dvb_ns_input_stop(struct ddb_input *input)
+int ddb_dvb_ns_input_stop(struct ddb_input *input)
 {
 	struct ddb_dvb *dvb = &input->port->dvb[input->nr & 1];
 
@@ -2863,7 +2858,7 @@ static int ddb_ports_attach(struct ddb *dev)
 	return ret;
 }
 
-static void ddb_ports_detach(struct ddb *dev)
+void ddb_ports_detach(struct ddb *dev)
 {
 	int i;
 	struct ddb_port *port;
@@ -3086,7 +3081,7 @@ static void ddb_dma_init(struct ddb_io *io, int nr, int out)
 		dma->div = INPUT_DMA_IRQ_DIV;
 	}
 	ddbwritel(io->port->dev, 0, DMA_BUFFER_ACK(dma));
-	pr_debug("DDBridge: init link %u, io %u, dma %u, dmaregs %08x bufregs %08x\n",
+	pr_info("DDBridge: init link %u, io %u, dma %u, dmaregs %08x bufregs %08x\n",
 		io->port->lnr, io->nr, nr, dma->regs, dma->bufregs);
 }
 
@@ -3102,7 +3097,7 @@ static void ddb_input_init(struct ddb_port *port, int nr, int pnr, int anr)
 	rm = io_regmap(input, 1);
 	input->regs = DDB_LINK_TAG(port->lnr) |
 		(rm->input->base + rm->input->size * nr);
-	pr_debug("DDBridge: init link %u, input %u, regs %08x\n",
+	pr_info("DDBridge: init link %u, input %u, regs %08x\n",
 		 port->lnr, nr, input->regs);
 	if (dev->has_dma) {
 		struct ddb_regmap *rm0 = io_regmap(input, 0);
@@ -3112,7 +3107,7 @@ static void ddb_input_init(struct ddb_port *port, int nr, int pnr, int anr)
 		if (port->lnr)
 			dma_nr += 32 + (port->lnr - 1) * 8;
 
-		pr_debug("DDBridge: init link %u, input %u, handler %u\n",
+		pr_info("DDBridge: init link %u, input %u, handler %u\n",
 			 port->lnr, nr, dma_nr + base);
 		dev->handler[0][dma_nr + base] = input_handler;
 		dev->handler_data[0][dma_nr + base] = (unsigned long) input;
@@ -3132,7 +3127,7 @@ static void ddb_output_init(struct ddb_port *port, int nr)
 	rm = io_regmap(output, 1);
 	output->regs = DDB_LINK_TAG(port->lnr) |
 		(rm->output->base + rm->output->size * nr);
-	pr_debug("DDBridge: init link %u, output %u, regs %08x\n",
+	pr_info("DDBridge: init link %u, output %u, regs %08x\n",
 		 port->lnr, nr, output->regs);
 	if (dev->has_dma) {
 		struct ddb_regmap *rm0 = io_regmap(output, 0);
@@ -3266,7 +3261,7 @@ static void ddb_ports_init(struct ddb *dev)
 	dev->port_num = p;
 }
 
-static void ddb_ports_release(struct ddb *dev)
+void ddb_ports_release(struct ddb *dev)
 {
 	int i;
 	struct ddb_port *port;
@@ -3363,7 +3358,7 @@ static void irq_handle_io(struct ddb *dev, u32 s)
 	}
 }
 
-static irqreturn_t irq_handler0(int irq, void *dev_id)
+irqreturn_t irq_handler0(int irq, void *dev_id)
 {
 	struct ddb *dev = (struct ddb *) dev_id;
 	u32 s = ddbreadl(dev, INTERRUPT_STATUS);
@@ -3380,7 +3375,7 @@ static irqreturn_t irq_handler0(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t irq_handler1(int irq, void *dev_id)
+irqreturn_t irq_handler1(int irq, void *dev_id)
 {
 	struct ddb *dev = (struct ddb *) dev_id;
 	u32 s = ddbreadl(dev, INTERRUPT_STATUS);
@@ -3397,7 +3392,7 @@ static irqreturn_t irq_handler1(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t irq_handler(int irq, void *dev_id)
+irqreturn_t irq_handler(int irq, void *dev_id)
 {
 	struct ddb *dev = (struct ddb *) dev_id;
 	u32 s = ddbreadl(dev, INTERRUPT_STATUS);
@@ -3476,7 +3471,7 @@ static irqreturn_t irq_handle_v2_n(struct ddb *dev, u32 n)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t irq_handler_v2(int irq, void *dev_id)
+irqreturn_t irq_handler_v2(int irq, void *dev_id)
 {
 	struct ddb *dev = (struct ddb *) dev_id;
 	u32 s = 0xffff & ddbreadl(dev, INTERRUPT_V2_STATUS);
@@ -3690,7 +3685,7 @@ static int ddb_nsd_attach(struct ddb *dev)
 	return ret;
 }
 
-static void ddb_nsd_detach(struct ddb *dev)
+void ddb_nsd_detach(struct ddb *dev)
 {
 	if (!dev->link[0].info->ns_num)
 		return;
@@ -4501,8 +4496,10 @@ static ssize_t gap_store(struct device *device, struct device_attribute *attr,
 
 	if (sscanf(buf, "%u\n", &val) != 1)
 		return -EINVAL;
-	if (val > 20)
+	if (val > 128)
 		return -EINVAL;
+	if (val == 128)
+		val = 0xffffffff;
 	dev->port[num].gap = val;
 	return count;
 }
@@ -4706,7 +4703,7 @@ static struct class ddb_class = {
 	.devnode        = ddb_devnode,
 };
 
-static int ddb_class_create(void)
+int ddb_class_create(void)
 {
 	ddb_major = register_chrdev(0, DDB_NAME, &ddb_fops);
 	if (ddb_major < 0)
@@ -4716,7 +4713,7 @@ static int ddb_class_create(void)
 	return 0;
 }
 
-static void ddb_class_destroy(void)
+void ddb_class_destroy(void)
 {
 	class_unregister(&ddb_class);
 	unregister_chrdev(ddb_major, DDB_NAME);
@@ -4814,7 +4811,7 @@ fail:
 	return res;
 }
 
-static void ddb_device_destroy(struct ddb *dev)
+void ddb_device_destroy(struct ddb *dev)
 {
 	if (IS_ERR(dev->ddb_dev))
 		return;
@@ -5088,7 +5085,7 @@ static int ddb_init_boards(struct ddb *dev)
 	return 0;
 }
 
-static int ddb_init(struct ddb *dev)
+int ddb_init(struct ddb *dev)
 {
 	mutex_init(&dev->link[0].flash_mutex);
 	if (no_init) {
@@ -5148,7 +5145,7 @@ static void ddb_reset_io(struct ddb *dev, u32 reg)
 	ddbwritel(dev, 0x00, reg);
 }
 
-static void ddb_reset_ios(struct ddb *dev)
+void ddb_reset_ios(struct ddb *dev)
 {
 	u32 i;
 	struct ddb_regmap *rm = dev->link[0].info->regmap;
@@ -5164,7 +5161,7 @@ static void ddb_reset_ios(struct ddb *dev)
 	usleep_range(5000, 6000);
 }
 
-static void ddb_unmap(struct ddb *dev)
+void ddb_unmap(struct ddb *dev)
 {
 	if (dev->regs)
 		iounmap(dev->regs);

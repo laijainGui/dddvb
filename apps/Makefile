@@ -1,4 +1,4 @@
-all: cit citin flashprog modt ddtest setmod ddflash setmod2
+all: cit citin flashprog modt ddtest setmod ddflash setmod2 pls
 
 cit: cit.c
 	$(CC) -o cit cit.c -lpthread
@@ -19,11 +19,10 @@ ddtest: ddtest.c
 	$(CC) -o ddtest ddtest.c
 
 ddflash: ddflash.c
-<<<<<<< HEAD
-	gcc -o ddflash ddflash.c
+	$(CC) -o ddflash ddflash.c
+
+pls: pls.c
+	$(CC) -o pls pls.c
 
 clean:
-	rm -rf cit citin flashprog modt ddtest setmod ddflash
-=======
-	$(CC) -o ddflash ddflash.c
->>>>>>> 933779aa24b643c4bdb72cbf7998eb96b9727084
+	rm -rf cit citin flashprog modt ddtest setmod setmod2 ddflash pls
